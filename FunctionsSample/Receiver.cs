@@ -13,21 +13,30 @@ namespace FunctionsSample
     {
         [FunctionName("Receiver")]
         public static async Task Run(
-            [EventHubTrigger("%EventHubName%", Connection = "EventHubConnectionString")] EventData[] events, 
+            [EventHubTrigger("%EventHubName%", Connection = "EventHubConnectionString")] EventData[] events,
+            [CosmosDB(
+                databaseName: "%DatabaseName%",
+                collectionName: "%CollectionName%",
+                ConnectionStringSetting = "CosmosDBConnectionString")] IAsyncCollector<dynamic> documents, 
             ILogger log)
         {
             var exceptions = new List<Exception>();
 
             log.LogInformation("Receiver triggered.");
 
-            foreach (EventData eventData in events)
+            foreach (var eventData in events)
             {
                 try
                 {
                     // Get the message body
                     var messageBody = Encoding.UTF8.GetString(eventData.Body.Array, eventData.Body.Offset, eventData.Body.Count);
 
-                    // Logic goes here...
+                    // Send to cosmos
+                    await documents.AddAsync(new 
+                    {
+                        body = messageBody
+                    });
+
                 }
                 catch (Exception e)
                 {
