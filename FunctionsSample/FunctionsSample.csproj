@@ -9,6 +9,7 @@
     <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.EventHubs" Version="3.0.2" />
     <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.Storage" Version="3.0.3" />
     <PackageReference Include="Microsoft.NET.Sdk.Functions" Version="1.0.26" />
+    <PackageReference Include="Parquet.Net" Version="3.3.3" />
   </ItemGroup>
   <ItemGroup>
     <None Update="cacert.pem">

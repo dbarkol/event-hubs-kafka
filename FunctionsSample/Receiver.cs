@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Azure.EventHubs;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Blob;
+using Parquet;
+using Parquet.Data;
+using Encoding = System.Text.Encoding;
 
 namespace FunctionsSample
 {
@@ -33,24 +35,43 @@ namespace FunctionsSample
             // filled with all the data from the events.
             byte[] data = new byte[0];
 
+            // Define the schema for the parquet file
+            var idColumn = new DataField<string>("id");
+            var bodyColumn = new DataField<string>("body");
+
+            // Retrieve a memory stream for the parquet information
+            var ms = await GetParquetStream(_containerName, "Packet.parquet");
+            ms.Position = 0;
+
+            // Iterate through the events and append to the stream
+            // the parquet row groups.
             foreach (var eventData in events)
-            {
-                try
+            {             
+               try
                 {
                     // Get the message body
                     var messageBody = Encoding.UTF8.GetString(eventData.Body.Array, eventData.Body.Offset, eventData.Body.Count);
 
-                    // Get the bytes of the message body and combine it with 
-                    // the array that will be used update the file.
-                    byte[] bytes = System.Text.Encoding.UTF8.GetBytes(messageBody);
-                    data = Combine(data, bytes);
+                    // Check to see if this is going to be an append operation to the 
+                    // parquet writer - it has to be explicitly set in the constructor.
+                    var appendFlag = ms.Length > 0;
 
-                    // Write the message to cosmos
-                    await documents.AddAsync(new 
+                    ms.Position = 0;                    
+                    using (var writer = new ParquetWriter(new Schema(idColumn, bodyColumn), ms, append: appendFlag))
                     {
-                        body = messageBody
-                    });
+                        using (var rg = writer.CreateRowGroup())
+                        {
+                            rg.WriteColumn(new DataColumn(idColumn, new string[]
+                            {
+                                $"{Guid.NewGuid().ToString()}"
+                            }));
 
+                            rg.WriteColumn(new DataColumn(bodyColumn, new string[]
+                            {
+                                messageBody
+                            }));
+                        }
+                    }
                 }
                 catch (Exception e)
                 {
@@ -61,11 +82,13 @@ namespace FunctionsSample
                 }
             }
 
-            // If there is something in the byte array then append it to the 
-            // file in storage. 
-            if (data.Length > 0)
+            // Create/overwrite the existing file. 
+            if (ms.Position > 0)
             {
-                await AppendData(_containerName, "test.txt", data);
+                // Set the position to 0 before sending the stream to
+                // create the file. 
+                ms.Position = 0;
+                await CreateParquetFile(_containerName, "Packet.parquet", ms);
             }
 
             // Once processing of the batch is complete, if any messages in the batch
@@ -77,7 +100,44 @@ namespace FunctionsSample
                 throw exceptions.Single();
         }
 
-        public static async Task AppendData(string containerName, string filename, byte[] data)
+        private static async Task<MemoryStream> GetParquetStream(string containerName, string filename)
+        {
+            var storageAccount = CloudStorageAccount.Parse(Environment.GetEnvironmentVariable("StorageConnectionString"));
+            var blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Create the container if it doesn't exist
+            var container = blobClient.GetContainerReference(containerName);
+            await container.CreateIfNotExistsAsync();
+
+            // Return an empty memory stream if the blob does not exist
+            var blob = container.GetBlockBlobReference(filename);
+            if (!await blob.ExistsAsync())
+            {
+                return new MemoryStream();
+            }
+
+            // Download the existing blob
+            var stream = new MemoryStream();
+            await blob.DownloadToStreamAsync(stream);
+
+            return stream;
+        }
+
+        private static async Task CreateParquetFile(string containerName, string filename, MemoryStream parquetStream)
+        {
+            var storageAccount = CloudStorageAccount.Parse(Environment.GetEnvironmentVariable("StorageConnectionString"));
+            var blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Create the container if it doesn't exist
+            var container = blobClient.GetContainerReference(containerName);
+            await container.CreateIfNotExistsAsync();
+
+            // Create the blob if it doesn't exist
+            var blob = container.GetBlockBlobReference(filename);
+            await blob.UploadFromStreamAsync(parquetStream);
+        }
+
+        private static async Task AppendData(string containerName, string filename, byte[] data)
         {
             var storageAccount = CloudStorageAccount.Parse(Environment.GetEnvironmentVariable("StorageConnectionString"));
             var blobClient = storageAccount.CreateCloudBlobClient();
